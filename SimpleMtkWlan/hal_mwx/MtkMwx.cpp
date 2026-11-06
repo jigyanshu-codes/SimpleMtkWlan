@@ -1367,14 +1367,14 @@ mwx_init_hw(struct ifnet *ifp)
 	MWX_DEV_LOG(sc, "init wtbl updated wcid=%u\n", mn->wcid);
 
 	rv = mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 1);
-	if (rv) {
+	if (rv && sc->sc_hwtype != MWX_HW_MT7902) {
 		MWX_DEV_LOG(sc, "init add dev failed error=%d\n", rv);
 		return rv;
 	}
 	MWX_DEV_LOG(sc, "init add dev ok\n");
 
 	rv = mt7921_mcu_set_tx(sc, &sc->sc_vif);
-	if (rv) {
+	if (rv && sc->sc_hwtype != MWX_HW_MT7902) {
 		MWX_DEV_LOG(sc, "init set tx failed error=%d\n", rv);
 		return rv;
 	}
@@ -2899,7 +2899,7 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
 	if (sc->sc_hwtype == MWX_HW_MT7902)
-		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
+		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT7925_INT_TX_DONE_ALL |
 		    MT_INT_MCU_CMD;
 	else
 		sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
@@ -6673,6 +6673,8 @@ mt7921_mcu_set_sniffer(struct mwx_softc *sc, int enable)
 		},
 	};
 
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		return mwx_mcu_send_msg(sc, MCU_UNI_CMD_SNIFFER, &req, sizeof(req), NULL);
 	return mwx_mcu_send_wait(sc, MCU_UNI_CMD_SNIFFER, &req, sizeof(req));
 }
 

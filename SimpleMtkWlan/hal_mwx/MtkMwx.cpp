@@ -2568,11 +2568,9 @@ mwx_intr(void *arg)
 			intr |= MT_INT_RX_DONE_DATA;
 	}
 
-	const uint32_t tx_done_mask = (sc->sc_hwtype == MWX_HW_MT7902) ?
-	    MT7925_INT_TX_DONE_ALL : MT_INT_TX_DONE_ALL;
 	bool rx_more = false;
 	for (int pass = 0; ; pass++) {
-		if (intr & tx_done_mask)
+		if (intr & MT_INT_TX_DONE_ALL)
 			mwx_dma_tx_done(sc);
 
 		if (intr & MT_INT_RX_DONE_WM)

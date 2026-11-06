@@ -253,6 +253,7 @@
 #define	MT_INT_TX0_TO_TX14		0x7fff0
 
 #define	MT_INT_TX_DONE_ALL		(MT_INT_TX_DONE_MCU_WM |	\
+					MT7925_INT_TX_DONE_MCU_WM |	\
 					MT_INT_TX_DONE_FWDL |		\
 					MT_INT_TX0_TO_TX14)
 

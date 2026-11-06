@@ -1367,14 +1367,14 @@ mwx_init_hw(struct ifnet *ifp)
 	MWX_DEV_LOG(sc, "init wtbl updated wcid=%u\n", mn->wcid);
 
 	rv = mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 1);
-	if (rv && sc->sc_hwtype != MWX_HW_MT7902) {
+	if (rv) {
 		MWX_DEV_LOG(sc, "init add dev failed error=%d\n", rv);
 		return rv;
 	}
 	MWX_DEV_LOG(sc, "init add dev ok\n");
 
 	rv = mt7921_mcu_set_tx(sc, &sc->sc_vif);
-	if (rv && sc->sc_hwtype != MWX_HW_MT7902) {
+	if (rv) {
 		MWX_DEV_LOG(sc, "init set tx failed error=%d\n", rv);
 		return rv;
 	}

@@ -62,6 +62,7 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 #endif
 
 #define PCI_VENDOR_MEDIATEK            0x14c3
+#define PCI_PRODUCT_MEDIATEK_MT7902    0x7902
 #define PCI_PRODUCT_MEDIATEK_MT7921    0x7961
 #define PCI_PRODUCT_MEDIATEK_MT7921K   0x0608
 #define PCI_PRODUCT_MEDIATEK_MT7922    0x7922
@@ -361,6 +362,7 @@ MCLGETL(struct mbuf *m, int how, size_t len)
 }
 
 static const struct pci_matchid mwx_devices[] = {
+	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7902 },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921 },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921K },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7922 },
@@ -371,6 +373,8 @@ static const struct pci_matchid mwx_devices[] = {
  * The PCIe interrupt and MCU paths can otherwise flood the kernel log. */
 /* #define MWX_DEBUG	1 */
 
+#define	MT7902_ROM_PATCH	"mwx-mt7902_patch_mcu_1_1_hdr"
+#define	MT7902_FIRMWARE_WM	"mwx-mt7902_ram_code_1"
 #define	MT7921_ROM_PATCH	"mwx-mt7961_patch_mcu_1_2_hdr"
 #define	MT7921_FIRMWARE_WM	"mwx-mt7961_ram_code_1"
 #define	MT7922_ROM_PATCH	"mwx-mt7922_patch_mcu_1_1_hdr"
@@ -505,6 +509,7 @@ struct mwx_vif {
 enum mwx_hw_type {
 	MWX_HW_MT7921,
 	MWX_HW_MT7922,
+	MWX_HW_MT7902,
 };
 
 struct mwx_setkey_task_arg {
@@ -2888,13 +2893,16 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_dmat = pa->pa_dmat;
 	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
 	    MT_INT_MCU_CMD;
-	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922 ||
+	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7902)
+		sc->sc_hwtype = MWX_HW_MT7902;
+	else if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922 ||
 	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922_PCIE)
 		sc->sc_hwtype = MWX_HW_MT7922;
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
 	MWX_DEV_LOG(sc, "attach hardware type=%s\n",
-	    sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921");
+	    sc->sc_hwtype == MWX_HW_MT7902 ? "MT7902" :
+	    (sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921"));
 	/* Resolve this before advertising VHT capabilities, not in preinit. */
 	{
 		int flag = 0;
@@ -5261,6 +5269,10 @@ mwx_load_firmware(struct mwx_softc *sc)
 	}
 
 	switch (sc->sc_hwtype) {
+	case MWX_HW_MT7902:
+		rompatch = MT7902_ROM_PATCH;
+		fw = MT7902_FIRMWARE_WM;
+		break;
 	case MWX_HW_MT7921:
 		rompatch = MT7921_ROM_PATCH;
 		fw = MT7921_FIRMWARE_WM;
@@ -8485,6 +8497,8 @@ MtkMwx::getFirmwareVersion()
 {
 	if (com == NULL)
 		return "MT792x";
+	if (com->sc_hwtype == MWX_HW_MT7902)
+		return "MT7902";
 	return com->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921";
 }
 
@@ -8509,6 +8523,8 @@ MtkMwx::getTxNSS()
 const char *
 MtkMwx::getFirmwareName()
 {
+	if (com != NULL && com->sc_hwtype == MWX_HW_MT7902)
+		return MT7902_FIRMWARE_WM;
 	if (com == NULL || com->sc_hwtype == MWX_HW_MT7922)
 		return MT7922_FIRMWARE_WM;
 	return MT7921_FIRMWARE_WM;

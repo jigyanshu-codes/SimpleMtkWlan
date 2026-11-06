@@ -2568,9 +2568,11 @@ mwx_intr(void *arg)
 			intr |= MT_INT_RX_DONE_DATA;
 	}
 
+	const uint32_t tx_done_mask = (sc->sc_hwtype == MWX_HW_MT7902) ?
+	    MT7925_INT_TX_DONE_ALL : MT_INT_TX_DONE_ALL;
 	bool rx_more = false;
 	for (int pass = 0; ; pass++) {
-		if (intr & MT_INT_TX_DONE_ALL)
+		if (intr & tx_done_mask)
 			mwx_dma_tx_done(sc);
 
 		if (intr & MT_INT_RX_DONE_WM)
@@ -2891,8 +2893,6 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_pc = pa->pa_pc;
 	sc->sc_tag = pa->pa_tag;
 	sc->sc_dmat = pa->pa_dmat;
-	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
-	    MT_INT_MCU_CMD;
 	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7902)
 		sc->sc_hwtype = MWX_HW_MT7902;
 	else if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922 ||
@@ -2900,6 +2900,12 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_hwtype = MWX_HW_MT7922;
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT7925_INT_TX_DONE_ALL |
+		    MT_INT_MCU_CMD;
+	else
+		sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
+		    MT_INT_MCU_CMD;
 	MWX_DEV_LOG(sc, "attach hardware type=%s\n",
 	    sc->sc_hwtype == MWX_HW_MT7902 ? "MT7902" :
 	    (sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921"));
@@ -3932,8 +3938,10 @@ mwx_dma_alloc(struct mwx_softc *sc)
 	if ((rv = mwx_queue_alloc(sc, &sc->sc_txq, 2048,
 	    MT_TX_DATA_RING_BASE)) != 0)
 		return rv;
+	const uint32_t tx_mcu_ring = (sc->sc_hwtype == MWX_HW_MT7902) ?
+	    MT7925_TX_MCU_RING_BASE : MT_TX_MCU_RING_BASE;
 	if ((rv = mwx_queue_alloc(sc, &sc->sc_txmcuq, 256,
-	    MT_TX_MCU_RING_BASE)) != 0)
+	    tx_mcu_ring)) != 0)
 		return rv;
 	if ((rv = mwx_queue_alloc(sc, &sc->sc_txfwdlq, 16 /* XXX */,
 	    MT_TX_FWDL_RING_BASE)) != 0)
@@ -3948,7 +3956,8 @@ mwx_dma_alloc(struct mwx_softc *sc)
 	    MT_RX_MCU_RING_BASE)) != 0 ||
 	    (rv = mwx_queue_fill(sc, &sc->sc_rxmcuq)) != 0)
 		return rv;
-	if ((rv = mwx_queue_alloc(sc, &sc->sc_rxfwdlq, 16 /* XXX */,
+	const int rx_fwdl_count = (sc->sc_hwtype == MWX_HW_MT7902) ? 256 : 16;
+	if ((rv = mwx_queue_alloc(sc, &sc->sc_rxfwdlq, rx_fwdl_count,
 	    MT_RX_FWDL_RING_BASE)) != 0 ||
 	    (rv = mwx_queue_fill(sc, &sc->sc_rxfwdlq)) != 0)
 		return rv;
@@ -4909,7 +4918,10 @@ mwx_dma_enable(struct mwx_softc *sc)
 	mwx_write(sc, MT_WFDMA0_TX_RING5_EXT_CTRL, PREFETCH(0x280, 0x4));
 	mwx_write(sc, MT_WFDMA0_TX_RING6_EXT_CTRL, PREFETCH(0x2c0, 0x4));
 	mwx_write(sc, MT_WFDMA0_TX_RING16_EXT_CTRL, PREFETCH(0x340, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING17_EXT_CTRL, PREFETCH(0x380, 0x4));
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		mwx_write(sc, MT_WFDMA0_TX_RING15_EXT_CTRL, PREFETCH(0x380, 0x4));
+	else
+		mwx_write(sc, MT_WFDMA0_TX_RING17_EXT_CTRL, PREFETCH(0x380, 0x4));
 
 	/* reset dma idx */
 	mwx_write(sc, MT_WFDMA0_RST_DTX_PTR, ~0);
@@ -5261,7 +5273,8 @@ mwx_load_firmware(struct mwx_softc *sc)
 	int i, rv, sem;
 
 	MWX_DEV_LOG(sc, "firmware load start hwtype=%s\n",
-	    sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921");
+	    sc->sc_hwtype == MWX_HW_MT7902 ? "MT7902" :
+	    (sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921"));
 	reg = mwx_read(sc, MT_CONN_ON_MISC) & MT_TOP_MISC2_FW_N9_RDY;
 	if (reg != 0) {
 		MWX_DEV_LOG(sc, "firmware already downloaded status=0x%08x\n", reg);

@@ -2899,7 +2899,7 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
 	if (sc->sc_hwtype == MWX_HW_MT7902)
-		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT7925_INT_TX_DONE_ALL |
+		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
 		    MT_INT_MCU_CMD;
 	else
 		sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
@@ -6626,9 +6626,15 @@ mt7921_mcu_uni_add_dev(struct mwx_softc *sc, struct mwx_vif *mvif,
 	}
 
 printf("%s: %s cmd %x mvif idx %d omac %d band %d wmm %d\n", DEVNAME(sc), __func__, cmd, mvif->idx, mvif->omac_idx, mvif->band_idx, mvif->wmm_idx);
-	rv = mwx_mcu_send_wait(sc, cmd, data, len);
-	if (rv < 0)
-		return rv;
+	if (sc->sc_hwtype == MWX_HW_MT7902) {
+		rv = mwx_mcu_send_msg(sc, cmd, data, len, NULL);
+		if (rv < 0)
+			return rv;
+	} else {
+		rv = mwx_mcu_send_wait(sc, cmd, data, len);
+		if (rv < 0)
+			return rv;
+	}
 
 	if (enable) {
 		cmd = MCU_UNI_CMD_BSS_INFO_UPDATE;
@@ -6641,6 +6647,8 @@ printf("%s: %s cmd %x mvif idx %d omac %d band %d wmm %d\n", DEVNAME(sc), __func
 	}
 
 printf("%s: %s cmd %x wcid %d\n", DEVNAME(sc), __func__, cmd, mn->wcid);
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		return mwx_mcu_send_msg(sc, cmd, data, len, NULL);
 	return mwx_mcu_send_wait(sc, cmd, data, len);
 }
 

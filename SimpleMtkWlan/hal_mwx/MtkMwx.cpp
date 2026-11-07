@@ -5993,21 +5993,20 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 
 	req->seq_num = sc->sc_scan_seq_num /* | sc->sc_band_idx << 7 */;
 	req->bss_idx = /* mvif->idx */ 0;
-	req->scan_type = 1;
-	req->probe_req_num = 2;
+	req->scan_type = /* sreq->n_ssids ? 1 : */ 0;
+	req->probe_req_num = /* sreq->n_ssids ? 2 : */ 0;
 	req->version = 1;
 
 #ifdef AIRPORT_WCL
 	/*
 	 * A scan macOS asked for (AirportMtkWlan): active when it wants probes,
-	 * with its SSID (hidden networks), on its channels. Scans the driver
-	 * starts itself stay passive over every channel, as with SimpleMtkWlan.
+	 * with its SSID (hidden networks), on its channels.
 	 * Like Linux mt76: probing with no SSID is the wildcard (ssid_type 1).
 	 */
+	req->scan_type = 1;
+	req->probe_req_num = 2;
 	if (ic->ic_wcl_scan_requested &&
 	    AirportWCL::scanUsesProbes(true, ic->ic_wcl_scan_active)) {
-		req->scan_type = 1;
-		req->probe_req_num = 2;
 		if (ic->ic_wcl_scan_ssid_length > 0 &&
 		    ic->ic_wcl_scan_ssid_length <= IEEE80211_NWID_LEN) {
 			req->ssids[0].ssid_len = htole32(ic->ic_wcl_scan_ssid_length);

@@ -2575,7 +2575,7 @@ mwx_intr(void *arg)
 
 		if (intr & MT_INT_RX_DONE_WM)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxfwdlq, &mlout);
-		if (sc->sc_hwtype != MWX_HW_MT7902 && (intr & MT_INT_RX_DONE_WM2))
+		if (intr & MT_INT_RX_DONE_WM2)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxmcuq, &mlout);
 		if (intr & MT_INT_RX_DONE_DATA)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxq, &mlout);

@@ -34,11 +34,11 @@
 #define	MT7925_MDP_DCR1			0x820cc804
 
 /* TMAC: band 0 (0x21000), band 1 (0xa1000) */
-#define	MT_BAND_BASE0		0x820f0000
-#define	MT_BAND_BASE1		0x820e0000
-#define	MT_BAND_OFF		(MT_BAND_BASE0 - MT_BAND_BASE1)
+#define	MT_BAND_BASE0		0x820e0000
+#define	MT_BAND_BASE1		0x820f0000
+#define	MT_BAND_OFF		(MT_BAND_BASE1 - MT_BAND_BASE0)
 #define	MT_BAND_ADDR(_band, ofs)		\
-	(MT_BAND_BASE0 - (_band) * MT_BAND_OFF + (ofs))
+	(MT_BAND_BASE0 + (_band) * MT_BAND_OFF + (ofs))
 
 #define	MT_TMAC_TCR0(_band)		MT_BAND_ADDR(_band, 0x4000)
 #define	MT_TMAC_TCR0_TBTT_STOP_CTRL	(1U << 25)

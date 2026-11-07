@@ -1346,7 +1346,17 @@ mwx_init_hw(struct ifnet *ifp)
 	}
 	MWX_DEV_LOG(sc, "init channel domain ok\n");
 
-	rv = mt7921_mcu_set_chan_info(sc, MCU_EXT_CMD_SET_RX_PATH);
+	/*
+	 * Retry MCU_EXT_CMD_SET_RX_PATH on cold interface enable if radio PLL is settling
+	 */
+	for (int try_rx = 0; try_rx < 3; try_rx++) {
+		rv = mt7921_mcu_set_chan_info(sc, MCU_EXT_CMD_SET_RX_PATH);
+		if (rv == 0)
+			break;
+		MWX_DEV_LOG(sc, "init set rx path attempt %d failed error=%d, retrying...\n",
+		    try_rx + 1, rv);
+		DELAY(50000);
+	}
 	if (rv) {
 		MWX_DEV_LOG(sc, "init set rx path failed error=%d\n", rv);
 		return rv;
@@ -1401,7 +1411,7 @@ mwx_init_hw(struct ifnet *ifp)
 	} else {
 		rv = mt7921_mcu_set_sniffer(sc, 0);
 		MWX_DEV_LOG(sc, "init sniffer disable returned %d\n", rv);
-		sc->sc_rxfilter |= MT_WF_RFCR_DROP_OTHER_UC;
+		sc->sc_rxfilter &= ~MT_WF_RFCR_DROP_OTHER_UC;
 		mwx_clear(sc, MT_DMA_DCR0(0), MT_DMA_DCR0_RXD_G5_EN);
 	}
 	mwx_write(sc, MT_WF_RFCR(0), sc->sc_rxfilter);
@@ -5983,8 +5993,8 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 
 	req->seq_num = sc->sc_scan_seq_num /* | sc->sc_band_idx << 7 */;
 	req->bss_idx = /* mvif->idx */ 0;
-	req->scan_type = /* sreq->n_ssids ? 1 : */ 0;
-	req->probe_req_num = /* sreq->n_ssids ? 2 : */ 0;
+	req->scan_type = 1;
+	req->probe_req_num = 2;
 	req->version = 1;
 
 #ifdef AIRPORT_WCL

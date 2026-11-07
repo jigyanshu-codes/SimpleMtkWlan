@@ -29,12 +29,13 @@ print <<'CPP'
 #define le16toh(x) (x)
 #define le32toh(x) (x)
 #define MWX_DEV_LOG(...) ((void)0)
+#define MWX_HW_MT7902 3
 CPP
 puts structs
 print <<'CPP'
 struct ieee80211_channel {unsigned ic_flags,ic_freq;};
 struct ieee80211com {ieee80211_channel ic_channels[256];};
-struct mwx_softc {ieee80211com sc_ic;unsigned sc_flags;uint8_t sc_scan_seq_num;};
+struct mwx_softc {ieee80211com sc_ic;unsigned sc_flags;uint8_t sc_scan_seq_num;unsigned sc_hwtype;};
 struct mbuf {unsigned char bytes[sizeof(mt76_connac_hw_scan_req)];};
 #define mtod(m,T) reinterpret_cast<T>((m)->bytes)
 #define IEEE80211_IS_CHAN_2GHZ(c) ((c)->ic_freq<100)

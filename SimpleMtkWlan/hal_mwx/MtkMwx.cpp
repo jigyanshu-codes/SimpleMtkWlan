@@ -1132,6 +1132,7 @@ void		mt7921_mac_set_timing(struct mwx_softc *);
 int		mt7921_mcu_uni_add_dev(struct mwx_softc *, struct mwx_vif *,
 		    struct mwx_node *, int);
 int		mt7921_mcu_set_sniffer(struct mwx_softc *, int);
+int		mt7921_mcu_set_rxfilter(struct mwx_softc *, uint32_t, uint8_t, uint32_t);
 int		mt7921_mcu_set_beacon_filter(struct mwx_softc *, int);
 int		mt7921_mcu_set_bss_pm(struct mwx_softc *, int);
 int		mt7921_mcu_set_tx(struct mwx_softc *, struct mwx_vif *);
@@ -1402,6 +1403,10 @@ mwx_init_hw(struct ifnet *ifp)
 	}
 	mwx_write(sc, MT_WF_RFCR(0), sc->sc_rxfilter);
 	MWX_DEV_LOG(sc, "init rxfilter set 0x%08x\n", sc->sc_rxfilter);
+
+	/* Ensure firmware passes unassociated BSS frames (beacons & probe responses) during scan */
+	mt7921_mcu_set_rxfilter(sc, MT7921_FILTER_ENABLE | MT7921_FILTER_OTHER_BSS, 0, 0);
+	mt7921_mcu_set_beacon_filter(sc, 0);
 
 	ifp->if_flags |= IFF_RUNNING;
 	ifq_clr_oactive(&ifp->if_snd);
@@ -2554,9 +2559,9 @@ mwx_intr(void *arg)
 		    intr & ~mask);
 		intr_unhandled_log_count++;
 	}
-	/* ack interrupts */
-	intr &= mask;
+	/* ack interrupts: clear hardware status before masking software bits */
 	mwx_write(sc, MT_WFDMA0_HOST_INT_STA, intr);
+	intr &= mask;
 
 	if (intr & MT_INT_MCU_CMD) {
 		intr_sw = mwx_read(sc, MT_MCU_CMD);
@@ -2587,10 +2592,13 @@ mwx_intr(void *arg)
 		 */
 		if (pass >= 8)
 			break;
-		intr = mwx_read(sc, MT_WFDMA0_HOST_INT_STA) & mask;
+		uint32_t intr_raw = mwx_read(sc, MT_WFDMA0_HOST_INT_STA);
+		if (intr_raw == 0)
+			break;
+		mwx_write(sc, MT_WFDMA0_HOST_INT_STA, intr_raw);
+		intr = intr_raw & mask;
 		if (intr == 0)
 			break;
-		mwx_write(sc, MT_WFDMA0_HOST_INT_STA, intr);
 		if (intr & MT_INT_MCU_CMD) {
 			intr_sw = mwx_read(sc, MT_MCU_CMD);
 			mwx_write(sc, MT_MCU_CMD, intr_sw);
@@ -5846,6 +5854,10 @@ mt7921_mcu_set_rts_thresh(struct mwx_softc *sc, uint32_t val, uint8_t band)
 int
 mwx_mcu_set_deep_sleep(struct mwx_softc *sc, int ena)
 {
+	/* MT7902 hardware does not use deep sleep / PM */
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		return 0;
+
 	struct mwx_connac_config req = {
 		.resp_type = 0,
 	};
@@ -6005,9 +6017,15 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	}
 
 	req->channel_type = nchan ? 4 : 0;
-	req->timeout_value = htole16(nchan * 120);
-	req->channel_min_dwell_time = htole16(120);
-	req->channel_dwell_time = htole16(120);
+	if (sc->sc_hwtype == MWX_HW_MT7902) {
+		req->timeout_value = 0;
+		req->channel_min_dwell_time = 0;
+		req->channel_dwell_time = 0;
+	} else {
+		req->timeout_value = htole16(nchan * 120);
+		req->channel_min_dwell_time = htole16(120);
+		req->channel_dwell_time = htole16(120);
+	}
 
 
 #ifdef NOTYET
@@ -6699,6 +6717,30 @@ mt7921_mcu_set_sniffer(struct mwx_softc *sc, int enable)
 }
 
 int
+mt7921_mcu_set_rxfilter(struct mwx_softc *sc, uint32_t fif,
+    uint8_t bit_op, uint32_t bit_map)
+{
+	struct {
+		uint8_t rsv[4];
+		uint8_t mode;
+		uint8_t rsv2[3];
+		uint32_t fif;
+		uint32_t bit_map;
+		uint8_t bit_op;
+		uint8_t pad[51];
+	} __attribute__((__packed__)) data;
+
+	memset(&data, 0, sizeof(data));
+	data.mode = fif ? 1 : 2;
+	data.fif = htole32(fif);
+	data.bit_map = htole32(bit_map);
+	data.bit_op = bit_op;
+
+	return mwx_mcu_send_msg(sc, MCU_CE_CMD_SET_RX_FILTER,
+	    &data, sizeof(data), NULL);
+}
+
+int
 mt7921_mcu_set_beacon_filter(struct mwx_softc *sc, int enable)
 {
 	int rv;
@@ -6710,13 +6752,17 @@ mt7921_mcu_set_beacon_filter(struct mwx_softc *sc, int enable)
 			return rv;
 #endif
 		mwx_set(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON);
+		rv = mt7921_mcu_set_rxfilter(sc, 0,
+		    MT7921_FIF_BIT_SET, MT_WF_RFCR_DROP_OTHER_BEACON);
 	} else {
 		rv = mt7921_mcu_set_bss_pm(sc, 0);
 		if (rv)
 			return rv;
 		mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON);
+		rv = mt7921_mcu_set_rxfilter(sc, 0,
+		    MT7921_FIF_BIT_CLR, MT_WF_RFCR_DROP_OTHER_BEACON);
 	}
-	return 0;
+	return rv;
 }
 
 int

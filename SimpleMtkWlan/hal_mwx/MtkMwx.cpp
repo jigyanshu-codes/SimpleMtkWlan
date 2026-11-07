@@ -2907,12 +2907,8 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_hwtype = MWX_HW_MT7922;
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
-	if (sc->sc_hwtype == MWX_HW_MT7902)
-		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT7925_INT_TX_DONE_ALL |
-		    MT_INT_MCU_CMD;
-	else
-		sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
-		    MT_INT_MCU_CMD;
+	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
+	    MT_INT_MCU_CMD;
 	MWX_DEV_LOG(sc, "attach hardware type=%s\n",
 	    sc->sc_hwtype == MWX_HW_MT7902 ? "MT7902" :
 	    (sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921"));
@@ -6054,15 +6050,9 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	}
 
 	req->channel_type = nchan ? 4 : 0;
-	if (sc->sc_hwtype == MWX_HW_MT7902) {
-		req->timeout_value = 0;
-		req->channel_min_dwell_time = 0;
-		req->channel_dwell_time = 0;
-	} else {
-		req->timeout_value = htole16(nchan * 120);
-		req->channel_min_dwell_time = htole16(120);
-		req->channel_dwell_time = htole16(120);
-	}
+	req->timeout_value = htole16(nchan * 120);
+	req->channel_min_dwell_time = htole16(120);
+	req->channel_dwell_time = htole16(120);
 
 
 #ifdef NOTYET

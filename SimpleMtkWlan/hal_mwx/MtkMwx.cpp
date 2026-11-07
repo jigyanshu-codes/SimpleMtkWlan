@@ -1121,6 +1121,8 @@ void		mt7921_mcu_scan_event(struct mwx_softc *, struct mbuf *);
 int		mt7921_mcu_hw_scan(struct mwx_softc *, int);
 int		mt7921_mcu_hw_scan_cancel(struct mwx_softc *);
 int		mt7921_mcu_set_mac_enable(struct mwx_softc *, int, int);
+int		mt7921_mcu_radio_led_ctrl(struct mwx_softc *, uint8_t);
+int		mt7921_mcu_wf_rf_pin_ctrl(struct mwx_softc *, uint8_t);
 int		mt7921_mcu_set_channel_domain(struct mwx_softc *);
 uint8_t		mt7921_mcu_chan_bw(struct ieee80211_channel *channel);
 int		mt7921_mcu_set_chan_info(struct mwx_softc *, int);
@@ -1344,12 +1346,12 @@ mwx_init_hw(struct ifnet *ifp)
 	}
 	MWX_DEV_LOG(sc, "init channel domain ok\n");
 
-#if 0
-	/* XXX no channel available yet */
 	rv = mt7921_mcu_set_chan_info(sc, MCU_EXT_CMD_SET_RX_PATH);
-	if (rv)
+	if (rv) {
+		MWX_DEV_LOG(sc, "init set rx path failed error=%d\n", rv);
 		return rv;
-#endif
+	}
+	MWX_DEV_LOG(sc, "init set rx path ok\n");
 
 	rv = mt7921_mcu_set_rate_txpower(sc);
 	if (rv) {
@@ -1408,6 +1410,11 @@ mwx_init_hw(struct ifnet *ifp)
 	/* Ensure firmware passes unassociated BSS frames (beacons & probe responses) during scan */
 	mt7921_mcu_set_rxfilter(sc, MT7921_FILTER_ENABLE | MT7921_FILTER_OTHER_BSS, 0, 0);
 	mt7921_mcu_set_beacon_filter(sc, 0);
+
+	/* Enable radio LED control, turn radio ON, and initialize RF PIN */
+	mt7921_mcu_radio_led_ctrl(sc, EXT_CMD_RADIO_LED_CTRL_ENABLE);
+	mt7921_mcu_radio_led_ctrl(sc, EXT_CMD_RADIO_ON_LED);
+	mt7921_mcu_wf_rf_pin_ctrl(sc, WF_RF_PIN_INIT);
 
 	ifp->if_flags |= IFF_RUNNING;
 	ifq_clr_oactive(&ifp->if_snd);
@@ -1494,6 +1501,7 @@ mwx_stop_internal(struct ifnet *ifp, bool teardown_owner)
 
 		mn = &sc->sc_vif.vif_mn;
 		mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 0);
+		mt7921_mcu_radio_led_ctrl(sc, EXT_CMD_RADIO_OFF_LED);
 		mwx_mcu_set_deep_sleep(sc, 1);
 		mt7921_mcu_set_mac_enable(sc, 0, 0);
 	}
@@ -6050,9 +6058,15 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	}
 
 	req->channel_type = nchan ? 4 : 0;
-	req->timeout_value = htole16(nchan * 120);
-	req->channel_min_dwell_time = htole16(120);
-	req->channel_dwell_time = htole16(120);
+	if (sc->sc_hwtype == MWX_HW_MT7902) {
+		req->timeout_value = 0;
+		req->channel_min_dwell_time = 0;
+		req->channel_dwell_time = 0;
+	} else {
+		req->timeout_value = htole16(nchan * 120);
+		req->channel_min_dwell_time = htole16(120);
+		req->channel_dwell_time = htole16(120);
+	}
 
 
 #ifdef NOTYET
@@ -6185,6 +6199,35 @@ mt7921_mcu_set_mac_enable(struct mwx_softc *sc, int band, int enable)
 
 	return mwx_mcu_send_wait(sc, MCU_EXT_CMD_MAC_INIT_CTRL, &req,
 	    sizeof(req));
+}
+
+int
+mt7921_mcu_radio_led_ctrl(struct mwx_softc *sc, uint8_t value)
+{
+	struct {
+		uint8_t		ctrlid;
+		uint8_t		rsv[3];
+	} __packed req = {
+		.ctrlid = value,
+	};
+
+	return mwx_mcu_send_msg(sc, MCU_EXT_CMD_ID_RADIO_ON_OFF_CTRL, &req,
+	    sizeof(req), NULL);
+}
+
+int
+mt7921_mcu_wf_rf_pin_ctrl(struct mwx_softc *sc, uint8_t action)
+{
+	struct {
+		uint8_t		action;
+		uint8_t		value;
+	} __packed req = {
+		.action = action,
+		.value = 0,
+	};
+
+	return mwx_mcu_send_msg(sc, MCU_EXT_CMD_WF_RF_PIN_CTRL, &req,
+	    sizeof(req), NULL);
 }
 
 int
@@ -6352,27 +6395,33 @@ mt7921_mcu_set_chan_info(struct mwx_softc *sc, int cmd)
 
 	if (sc->sc_ic.ic_opmode == IEEE80211_M_STA && sc->sc_ic.ic_bss != NULL)
 		channel = sc->sc_ic.ic_bss->ni_chan;
-	else
+	else if (sc->sc_ic.ic_ibss_chan != NULL)
 		channel = sc->sc_ic.ic_ibss_chan;
-
-	req.control_ch = ieee80211_mhz2ieee(channel->ic_freq,
-		    channel->ic_flags);
-	req.center_ch = req.control_ch;
-	req.bw = CMD_CBW_20MHZ;
-	/* Use the negotiated operating width, not the channel capabilities. */
-	if (sc->sc_ic.ic_opmode == IEEE80211_M_STA && sc->sc_ic.ic_bss != NULL &&
-	    channel == sc->sc_ic.ic_bss->ni_chan)
-		mwx_node_chan_width(sc->sc_ic.ic_bss, &req.bw, &req.center_ch);
-
-#ifdef NOTYET
-	if (channel->ic_flags & IEEE80211_CHAN_6GHZ)
-		req.channel_band = 2;
+	else if (sc->sc_ic.ic_channels != NULL)
+		channel = &sc->sc_ic.ic_channels[1];
 	else
-#endif
-	if (channel->ic_flags & IEEE80211_CHAN_5GHZ)
-		req.channel_band = 1;
-	else
+		channel = NULL;
+
+	if (channel != NULL) {
+		req.control_ch = ieee80211_mhz2ieee(channel->ic_freq,
+			    channel->ic_flags);
+		req.center_ch = req.control_ch;
+		req.bw = CMD_CBW_20MHZ;
+		/* Use the negotiated operating width, not the channel capabilities. */
+		if (sc->sc_ic.ic_opmode == IEEE80211_M_STA && sc->sc_ic.ic_bss != NULL &&
+		    channel == sc->sc_ic.ic_bss->ni_chan)
+			mwx_node_chan_width(sc->sc_ic.ic_bss, &req.bw, &req.center_ch);
+
+		if (channel->ic_flags & IEEE80211_CHAN_5GHZ)
+			req.channel_band = 1;
+		else
+			req.channel_band = 0;
+	} else {
+		req.control_ch = 1;
+		req.center_ch = 1;
+		req.bw = CMD_CBW_20MHZ;
 		req.channel_band = 0;
+	}
 
 #ifdef NOTYET
 	if (dev->mt76.hw->conf.flags & IEEE80211_CONF_OFFCHANNEL)

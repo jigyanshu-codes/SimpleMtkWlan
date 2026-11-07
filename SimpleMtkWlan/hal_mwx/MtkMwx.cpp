@@ -1099,6 +1099,7 @@ int		mwx_load_firmware(struct mwx_softc *);
 int		mwx_mac_wtbl_update(struct mwx_softc *, int);
 void		mwx_mac_init_band(struct mwx_softc *sc, uint32_t);
 void		mwx_mac_init(struct mwx_softc *);
+int		mwx_mcu_restart(struct mwx_softc *);
 int		mwx_mcu_patch_sem_ctrl(struct mwx_softc *, int);
 int		mwx_mcu_init_download(struct mwx_softc *, uint32_t,
 		    uint32_t, uint32_t);
@@ -5335,8 +5336,28 @@ mwx_load_firmware(struct mwx_softc *sc)
 	MWX_DEV_LOG(sc, "firmware blobs loaded patch_size=%zu wm_size=%zu\n",
 	    buflen, fwlen);
 
+	/*
+	 * MediaTek ConnAc2 MCU restart / wake:
+	 * Send MCU_CMD_NIC_POWER_CTRL (0x04) with power_mode=1 to awaken the MCU
+	 * into download mode, and poll MT_CONN_ON_MISC until MT_TOP_MISC2_FW_PWR_ON asserts.
+	 */
+	MWX_DEV_LOG(sc, "triggering MCU restart / power control\n");
+	mwx_mcu_restart(sc);
+
+	if (mwx_poll(sc, MT_CONN_ON_MISC, MT_TOP_MISC2_FW_PWR_ON,
+	    MT_TOP_MISC_FW_STATE, 1000) != 0) {
+		MWX_DEV_LOG(sc, "MCU power-on state poll timed out (MISC=0x%08x)\n",
+		    mwx_read(sc, MT_CONN_ON_MISC));
+	} else {
+		MWX_DEV_LOG(sc, "MCU ready for firmware download (MISC=0x%08x)\n",
+		    mwx_read(sc, MT_CONN_ON_MISC));
+	}
+
 	rv = mwx_mcu_patch_sem_ctrl(sc, 1);
-	if (rv != 0) {
+	if (rv < 0) {
+		MWX_DEV_LOG(sc, "patch already downloaded, proceeding to WM firmware\n");
+		goto dl_wm;
+	} else if (rv != 0) {
 		MWX_DEV_LOG(sc, "patch semaphore acquire failed error=%d\n", rv);
 		goto fail;
 	}
@@ -5419,6 +5440,7 @@ out:
 	if (rv != 0)
 		goto fail;
 
+dl_wm:
 	if (fwlen < sizeof(*fwhdr)) {
 		MWX_DEV_LOG(sc, "invalid WM firmware size=%zu min=%zu\n",
 		    fwlen, sizeof(*fwhdr));
@@ -5576,6 +5598,21 @@ mwx_mac_init(struct mwx_softc *sc)
 	mwx_mac_init_band(sc, 1);
 
 	sc->sc_rxfilter = mwx_read(sc, MT_WF_RFCR(0));
+}
+
+int
+mwx_mcu_restart(struct mwx_softc *sc)
+{
+	struct {
+		uint8_t power_mode;
+		uint8_t rsv[3];
+	} req = {
+		.power_mode = 1,
+		.rsv = {0, 0, 0}
+	};
+
+	MWX_DEV_LOG(sc, "sending MCU_CMD_NIC_POWER_CTRL (0x04) mode=1\n");
+	return mwx_mcu_send_msg(sc, MCU_CMD_NIC_POWER_CTRL, &req, sizeof(req), NULL);
 }
 
 int

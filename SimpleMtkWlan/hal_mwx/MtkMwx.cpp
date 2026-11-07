@@ -2575,7 +2575,7 @@ mwx_intr(void *arg)
 
 		if (intr & MT_INT_RX_DONE_WM)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxfwdlq, &mlout);
-		if (intr & MT_INT_RX_DONE_WM2)
+		if (sc->sc_hwtype != MWX_HW_MT7902 && (intr & MT_INT_RX_DONE_WM2))
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxmcuq, &mlout);
 		if (intr & MT_INT_RX_DONE_DATA)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxq, &mlout);
@@ -3950,11 +3950,13 @@ mwx_dma_alloc(struct mwx_softc *sc)
 	    MT_RX_DATA_RING_BASE)) != 0 ||
 	    (rv = mwx_queue_fill(sc, &sc->sc_rxq)) != 0)
 		return rv;
-	if ((rv = mwx_queue_alloc(sc, &sc->sc_rxmcuq, 256,
-	    MT_RX_MCU_RING_BASE)) != 0 ||
-	    (rv = mwx_queue_fill(sc, &sc->sc_rxmcuq)) != 0)
-		return rv;
-	const int rx_fwdl_count = (sc->sc_hwtype == MWX_HW_MT7902) ? 256 : 16;
+	if (sc->sc_hwtype != MWX_HW_MT7902) {
+		if ((rv = mwx_queue_alloc(sc, &sc->sc_rxmcuq, 256,
+		    MT_RX_MCU_RING_BASE)) != 0 ||
+		    (rv = mwx_queue_fill(sc, &sc->sc_rxmcuq)) != 0)
+			return rv;
+	}
+	const int rx_fwdl_count = (sc->sc_hwtype == MWX_HW_MT7902) ? 512 : 16;
 	if ((rv = mwx_queue_alloc(sc, &sc->sc_rxfwdlq, rx_fwdl_count,
 	    MT_RX_FWDL_RING_BASE)) != 0 ||
 	    (rv = mwx_queue_fill(sc, &sc->sc_rxfwdlq)) != 0)
@@ -3987,14 +3989,15 @@ mwx_dma_reset(struct mwx_softc *sc, int fullreset)
 
 	/* RX queues */
 	mwx_queue_reset(sc, &sc->sc_rxq);
-	mwx_queue_reset(sc, &sc->sc_rxmcuq);
+	if (sc->sc_hwtype != MWX_HW_MT7902)
+		mwx_queue_reset(sc, &sc->sc_rxmcuq);
 	mwx_queue_reset(sc, &sc->sc_rxfwdlq);
 
 	/* TDOD mt76_tx_status_check */
 
 	/* refill RX queues */
 	if ((rv = mwx_queue_fill(sc, &sc->sc_rxq)) != 0 ||
-	    (rv = mwx_queue_fill(sc, &sc->sc_rxmcuq)) != 0 ||
+	    (sc->sc_hwtype != MWX_HW_MT7902 && (rv = mwx_queue_fill(sc, &sc->sc_rxmcuq)) != 0) ||
 	    (rv = mwx_queue_fill(sc, &sc->sc_rxfwdlq)) != 0)
 		return rv;
 
@@ -4901,25 +4904,40 @@ void
 mwx_dma_enable(struct mwx_softc *sc)
 {
 #define PREFETCH(base, depth)   ((base) << 16 | (depth))
-	/* configure perfetch settings */
-	mwx_write(sc, MT_WFDMA0_RX_RING0_EXT_CTRL, PREFETCH(0x0, 0x4));
-	mwx_write(sc, MT_WFDMA0_RX_RING2_EXT_CTRL, PREFETCH(0x40, 0x4));
-	mwx_write(sc, MT_WFDMA0_RX_RING3_EXT_CTRL, PREFETCH(0x80, 0x4));
-	mwx_write(sc, MT_WFDMA0_RX_RING4_EXT_CTRL, PREFETCH(0xc0, 0x4));
-	mwx_write(sc, MT_WFDMA0_RX_RING5_EXT_CTRL, PREFETCH(0x100, 0x4));
+	/* configure prefetch settings */
+	if (sc->sc_hwtype == MWX_HW_MT7902) {
+		/* MT7902 rx ring prefetch */
+		mwx_write(sc, MT_WFDMA0_RX_RING0_EXT_CTRL, PREFETCH(0x0000, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING1_EXT_CTRL, PREFETCH(0x0040, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING2_EXT_CTRL, PREFETCH(0x0080, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING3_EXT_CTRL, PREFETCH(0x00c0, 0x4));
+		/* MT7902 tx ring prefetch */
+		mwx_write(sc, MT_WFDMA0_TX_RING0_EXT_CTRL, PREFETCH(0x0100, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING1_EXT_CTRL, PREFETCH(0x0140, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING2_EXT_CTRL, PREFETCH(0x0180, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING3_EXT_CTRL, PREFETCH(0x01c0, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING4_EXT_CTRL, PREFETCH(0x0200, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING5_EXT_CTRL, PREFETCH(0x0240, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING6_EXT_CTRL, PREFETCH(0x0280, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING15_EXT_CTRL, PREFETCH(0x02c0, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING16_EXT_CTRL, PREFETCH(0x0300, 0x4));
+	} else {
+		mwx_write(sc, MT_WFDMA0_RX_RING0_EXT_CTRL, PREFETCH(0x0, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING2_EXT_CTRL, PREFETCH(0x40, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING3_EXT_CTRL, PREFETCH(0x80, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING4_EXT_CTRL, PREFETCH(0xc0, 0x4));
+		mwx_write(sc, MT_WFDMA0_RX_RING5_EXT_CTRL, PREFETCH(0x100, 0x4));
 
-	mwx_write(sc, MT_WFDMA0_TX_RING0_EXT_CTRL, PREFETCH(0x140, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING1_EXT_CTRL, PREFETCH(0x180, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING2_EXT_CTRL, PREFETCH(0x1c0, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING3_EXT_CTRL, PREFETCH(0x200, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING4_EXT_CTRL, PREFETCH(0x240, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING5_EXT_CTRL, PREFETCH(0x280, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING6_EXT_CTRL, PREFETCH(0x2c0, 0x4));
-	mwx_write(sc, MT_WFDMA0_TX_RING16_EXT_CTRL, PREFETCH(0x340, 0x4));
-	if (sc->sc_hwtype == MWX_HW_MT7902)
-		mwx_write(sc, MT_WFDMA0_TX_RING15_EXT_CTRL, PREFETCH(0x380, 0x4));
-	else
+		mwx_write(sc, MT_WFDMA0_TX_RING0_EXT_CTRL, PREFETCH(0x140, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING1_EXT_CTRL, PREFETCH(0x180, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING2_EXT_CTRL, PREFETCH(0x1c0, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING3_EXT_CTRL, PREFETCH(0x200, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING4_EXT_CTRL, PREFETCH(0x240, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING5_EXT_CTRL, PREFETCH(0x280, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING6_EXT_CTRL, PREFETCH(0x2c0, 0x4));
+		mwx_write(sc, MT_WFDMA0_TX_RING16_EXT_CTRL, PREFETCH(0x340, 0x4));
 		mwx_write(sc, MT_WFDMA0_TX_RING17_EXT_CTRL, PREFETCH(0x380, 0x4));
+	}
 
 	/* reset dma idx */
 	mwx_write(sc, MT_WFDMA0_RST_DTX_PTR, ~0);
@@ -6017,7 +6035,7 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	    req->ext_channels_num, le16toh(req->timeout_value),
 	    le16toh(req->channel_dwell_time),
 	    le16toh(req->channel_min_dwell_time),
-	    le32toh(req->scan_func), req->ssid_type);
+	    (uint32_t)req->scan_func, req->ssid_type);
 
 	rv = mwx_mcu_send_mbuf(sc, MCU_CE_CMD_START_HW_SCAN, m, NULL);
 	if (rv != 0)
@@ -6415,6 +6433,8 @@ mt7921_mcu_rate_txpower_band(struct mwx_softc *sc, int band,
 		    NULL);
 		if (rv != 0)
 			break;
+		if (sc->sc_hwtype == MWX_HW_MT7902)
+			(void)mwx_read(sc, 0x820c8000); /* PSE barrier for MT7902 */
 	}
 
 	return rv;
@@ -9246,15 +9266,19 @@ MtkMwx::debugPoll()
 		    ic->ic_state,
 		    ic->ic_bss ? ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) : 0,
 		    mwx_intr_calls, sta, ena, lp, mcu);
+		const uint32_t rq_cpu = sc->sc_rxq.mq_regbase ?
+		    mwx_read(sc, sc->sc_rxq.mq_regbase + MT_DMA_CPU_IDX) : 0;
+		const uint32_t rq_dma = sc->sc_rxq.mq_regbase ?
+		    mwx_read(sc, sc->sc_rxq.mq_regbase + MT_DMA_DMA_IDX) : 0;
+		const uint32_t fwdl_cpu = sc->sc_rxfwdlq.mq_regbase ?
+		    mwx_read(sc, sc->sc_rxfwdlq.mq_regbase + MT_DMA_CPU_IDX) : 0;
+		const uint32_t fwdl_dma = sc->sc_rxfwdlq.mq_regbase ?
+		    mwx_read(sc, sc->sc_rxfwdlq.mq_regbase + MT_DMA_DMA_IDX) : 0;
 		MWX_DEV_LOG(sc,
-		    "poll txq cpu=%u dma=%u | txmcu cpu=%u dma=%u | rxq cpu=%u dma=%u cons=%u | rxmcu cpu=%u dma=%u cons=%u\n",
+		    "poll txq cpu=%u dma=%u | txmcu cpu=%u dma=%u | rxq cpu=%u dma=%u cons=%u | rxfwdl cpu=%u dma=%u cons=%u\n",
 		    tq_cpu, tq_dma, mq_cpu, mq_dma,
-		    mwx_read(sc, sc->sc_rxq.mq_regbase + MT_DMA_CPU_IDX),
-		    mwx_read(sc, sc->sc_rxq.mq_regbase + MT_DMA_DMA_IDX),
-		    sc->sc_rxq.mq_cons,
-		    mwx_read(sc, sc->sc_rxmcuq.mq_regbase + MT_DMA_CPU_IDX),
-		    mwx_read(sc, sc->sc_rxmcuq.mq_regbase + MT_DMA_DMA_IDX),
-		    sc->sc_rxmcuq.mq_cons);
+		    rq_cpu, rq_dma, sc->sc_rxq.mq_cons,
+		    fwdl_cpu, fwdl_dma, sc->sc_rxfwdlq.mq_cons);
 		drops[0] = 0;
 		for (i = 0; i < MWX_RX_DROP_REASONS &&
 		    mwx_rx_drop_name[i] != NULL && off < sizeof(drops) - 24; i++)

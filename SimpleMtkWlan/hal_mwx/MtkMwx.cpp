@@ -1501,8 +1501,12 @@ mwx_stop_internal(struct ifnet *ifp, bool teardown_owner)
 
 		mn = &sc->sc_vif.vif_mn;
 		mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 0);
-		mt7921_mcu_radio_led_ctrl(sc, EXT_CMD_RADIO_OFF_LED);
-		mwx_mcu_set_deep_sleep(sc, 1);
+		if (teardown_owner) {
+			mt7921_mcu_radio_led_ctrl(sc, EXT_CMD_RADIO_OFF_LED);
+		}
+		if (sc->sc_hwtype != MWX_HW_MT7902) {
+			mwx_mcu_set_deep_sleep(sc, 1);
+		}
 		mt7921_mcu_set_mac_enable(sc, 0, 0);
 	}
 
@@ -2589,7 +2593,7 @@ mwx_intr(void *arg)
 
 		if (intr & MT_INT_RX_DONE_WM)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxfwdlq, &mlout);
-		if (intr & MT_INT_RX_DONE_WM2)
+		if ((intr & MT_INT_RX_DONE_WM2) && sc->sc_hwtype != MWX_HW_MT7902)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxmcuq, &mlout);
 		if (intr & MT_INT_RX_DONE_DATA)
 			rx_more |= mwx_dma_rx_done(sc, &sc->sc_rxq, &mlout);
@@ -2915,8 +2919,10 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_hwtype = MWX_HW_MT7922;
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
-	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
-	    MT_INT_MCU_CMD;
+	if (sc->sc_hwtype == MWX_HW_MT7902)
+		sc->sc_intr_mask = MT7925_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL | MT_INT_MCU_CMD;
+	else
+		sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL | MT_INT_MCU_CMD;
 	MWX_DEV_LOG(sc, "attach hardware type=%s\n",
 	    sc->sc_hwtype == MWX_HW_MT7902 ? "MT7902" :
 	    (sc->sc_hwtype == MWX_HW_MT7922 ? "MT7922" : "MT7921"));
@@ -6058,15 +6064,9 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	}
 
 	req->channel_type = nchan ? 4 : 0;
-	if (sc->sc_hwtype == MWX_HW_MT7902) {
-		req->timeout_value = 0;
-		req->channel_min_dwell_time = 0;
-		req->channel_dwell_time = 0;
-	} else {
-		req->timeout_value = htole16(nchan * 120);
-		req->channel_min_dwell_time = htole16(120);
-		req->channel_dwell_time = htole16(120);
-	}
+	req->timeout_value = htole16(nchan * 120);
+	req->channel_min_dwell_time = htole16(120);
+	req->channel_dwell_time = htole16(120);
 
 
 #ifdef NOTYET

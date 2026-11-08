@@ -2467,7 +2467,6 @@ mwx_rx(struct mwx_softc *sc, struct mbuf *m, struct mbuf_list *ml, uint8_t rxque
 	 * neighbouring BSSes just waste CPU and can stall the workloop. */
 	if (ic->ic_state != IEEE80211_S_RUN &&
 	    (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
-		ic->ic_stats.is_rx_wrongdir++;
 		m_freem(m);
 		return;
 	}

@@ -351,7 +351,8 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     if (!channel || channel > 196)
         return;
     char ssidBuf[33] = {0};
-    memcpy(ssidBuf, node->ni_essid, std::min<size_t>(node->ni_esslen, 32));
+    size_t slen = node->ni_esslen < 32 ? node->ni_esslen : 32;
+    memcpy(ssidBuf, node->ni_essid, slen);
     IOLog("AirportMtkWlan: publishWCLBeacon SSID='%s' chan=%u rssi=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x\n",
         ssidBuf, channel, IWM_MIN_DBM + node->ni_rssi,
         node->ni_bssid[0], node->ni_bssid[1], node->ni_bssid[2],

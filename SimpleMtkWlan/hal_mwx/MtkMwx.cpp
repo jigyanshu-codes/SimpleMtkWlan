@@ -552,7 +552,6 @@ struct mwx_softc {
 	struct task		sc_scan_task;
 	struct task		sc_reset_task;
 	CTimeout		*sc_reset_to;
-	CTimeout		*sc_scan_to;
 	u_int			sc_flags;
 #define MWX_FLAG_SCANNING		0x01
 #define MWX_FLAG_BGSCAN			0x02
@@ -1118,7 +1117,6 @@ int		mwx_mcu_set_deep_sleep(struct mwx_softc *, int);
 void		mt7921_mcu_low_power_event(struct mwx_softc *, struct mbuf *);
 void		mt7921_mcu_tx_done_event(struct mwx_softc *, struct mbuf *);
 void		mwx_end_scan_task(void *);
-void		mwx_scan_timeo(void *);
 void		mt7921_mcu_scan_event(struct mwx_softc *, struct mbuf *);
 int		mt7921_mcu_hw_scan(struct mwx_softc *, int);
 int		mt7921_mcu_hw_scan_cancel(struct mwx_softc *);
@@ -1502,7 +1500,6 @@ mwx_stop_internal(struct ifnet *ifp, bool teardown_owner)
 	}
 	task_del(systq, &sc->sc_scan_task);
 	timeout_del(&sc->sc_reset_to);
-	timeout_del(&sc->sc_scan_to);
 
 	ifp->if_timer = 0;
 	ifp->if_flags &= ~IFF_RUNNING;
@@ -3214,7 +3211,6 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	task_set(&sc->sc_reset_task, mwx_reset_task, sc, "mwx_reset");
 	task_set(&sc->sc_scan_task, mwx_end_scan_task, sc, "mwx_scan");
 	timeout_set(&sc->sc_reset_to, mwx_reset_timeo, sc);
-	timeout_set(&sc->sc_scan_to, mwx_scan_timeo, sc);
 
 	/*
 	 * We cannot read the MAC address without loading the
@@ -6091,8 +6087,6 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 			chan = &req->ext_channels[nchan - 32];
 
 		channel_num = ieee80211_mhz2ieee(c->ic_freq, 0);
-		if (channel_num == 14)
-			continue;
 		/* TODO IEEE80211_IS_CHAN_6GHZ -> chan->band = 3*/
 		if (IEEE80211_IS_CHAN_2GHZ(c)) {
 			chan->band = 1;
@@ -6149,15 +6143,9 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	    le16toh(req->channel_min_dwell_time),
 	    (uint32_t)req->scan_func, req->ssid_type);
 
-	/* Ensure RMAC hardware filter does not drop unassociated beacons or probe responses */
-	mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS);
-	mwx_clear(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS);
-
 	rv = mwx_mcu_send_mbuf(sc, MCU_CE_CMD_START_HW_SCAN, m, NULL);
 	if (rv != 0)
 		sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);
-	else
-		timeout_add_msec(&sc->sc_scan_to, 4000);
 
 	return rv;
 }
@@ -6174,27 +6162,11 @@ mt7921_mcu_hw_scan_cancel(struct mwx_softc *sc)
 	};
 	int rv;
 
-	timeout_del(&sc->sc_scan_to);
 	rv = mwx_mcu_send_msg(sc, MCU_CE_CMD_CANCEL_HW_SCAN, &req,
 	    sizeof(req), NULL);
 	if (rv == 0)
 		sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);
 	return rv;
-}
-
-void
-mwx_scan_timeo(void *arg)
-{
-	struct mwx_softc *sc = (struct mwx_softc *)arg;
-	struct ieee80211com *ic = &sc->sc_ic;
-
-	if (!(sc->sc_flags & MWX_FLAG_SCANNING))
-		return;
-
-	int nodes = mwx_count_nodes(ic);
-	MWX_DEV_LOG(sc, "hw scan timeout (4s): completing scan cycle nodes=%d\n", nodes);
-	mt7921_mcu_hw_scan_cancel(sc);
-	task_add(systq, &sc->sc_scan_task);
 }
 
 void
@@ -6230,7 +6202,6 @@ mt7921_mcu_scan_event(struct mwx_softc *sc, struct mbuf *m)
 	uint32_t probe_sum = 0, mdrdy_sum = 0;
 	int i, nodes_before;
 
-	timeout_del(&sc->sc_scan_to);
 	sc->sc_scan_done_count++;
 	nodes_before = mwx_count_nodes(ic);
 	sc->sc_scan_last_ieee80211_nodes = nodes_before;
@@ -8613,13 +8584,11 @@ MtkMwx::detach(IOPCIDevice *device)
     com->sc_detaching = true;
     mwx_rx_amsdu_begin_teardown(com);
     timeout_del(&com->sc_reset_to);
-    timeout_del(&com->sc_scan_to);
     /* Keep interrupts alive while in-flight MCU requests finish. */
     taskq_quiesce(com->sc_nswq);
     if (taskQueueOwned) taskq_quiesce(systq);
     if (ifp->if_flags & IFF_RUNNING) mwx_stop_internal(ifp, true);
     timeout_free(&com->sc_reset_to);
-    timeout_free(&com->sc_scan_to);
     /* No interrupt callback may access buffers during their destruction. */
     if (com->sc_ih) {
         pci_intr_disestablish(pci->pa_pc, com->sc_ih);

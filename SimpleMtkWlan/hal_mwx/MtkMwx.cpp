@@ -6143,10 +6143,6 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	    le16toh(req->channel_min_dwell_time),
 	    (uint32_t)req->scan_func, req->ssid_type);
 
-	/* Ensure RMAC hardware filter does not drop unassociated beacons, BSS frames, or packets */
-	mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS | MT_WF_RFCR_DROP_OTHER_UC);
-	mwx_clear(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS | MT_WF_RFCR_DROP_OTHER_UC);
-
 	rv = mwx_mcu_send_mbuf(sc, MCU_CE_CMD_START_HW_SCAN, m, NULL);
 	if (rv != 0)
 		sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);

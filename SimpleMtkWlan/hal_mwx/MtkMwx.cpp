@@ -552,6 +552,7 @@ struct mwx_softc {
 	struct task		sc_scan_task;
 	struct task		sc_reset_task;
 	CTimeout		*sc_reset_to;
+	CTimeout		*sc_scan_to;
 	u_int			sc_flags;
 #define MWX_FLAG_SCANNING		0x01
 #define MWX_FLAG_BGSCAN			0x02
@@ -1117,6 +1118,7 @@ int		mwx_mcu_set_deep_sleep(struct mwx_softc *, int);
 void		mt7921_mcu_low_power_event(struct mwx_softc *, struct mbuf *);
 void		mt7921_mcu_tx_done_event(struct mwx_softc *, struct mbuf *);
 void		mwx_end_scan_task(void *);
+void		mwx_scan_timeo(void *);
 void		mt7921_mcu_scan_event(struct mwx_softc *, struct mbuf *);
 int		mt7921_mcu_hw_scan(struct mwx_softc *, int);
 int		mt7921_mcu_hw_scan_cancel(struct mwx_softc *);
@@ -1421,6 +1423,7 @@ mwx_init_hw(struct ifnet *ifp)
 		mwx_clear(sc, MT_DMA_DCR0(0), MT_DMA_DCR0_RXD_G5_EN);
 	}
 	mwx_write(sc, MT_WF_RFCR(0), sc->sc_rxfilter);
+	mwx_write(sc, MT_WF_RFCR(1), sc->sc_rxfilter);
 	MWX_DEV_LOG(sc, "init rxfilter set 0x%08x\n", sc->sc_rxfilter);
 
 	/* Ensure firmware passes unassociated BSS frames (beacons & probe responses) during scan */
@@ -1499,6 +1502,7 @@ mwx_stop_internal(struct ifnet *ifp, bool teardown_owner)
 	}
 	task_del(systq, &sc->sc_scan_task);
 	timeout_del(&sc->sc_reset_to);
+	timeout_del(&sc->sc_scan_to);
 
 	ifp->if_timer = 0;
 	ifp->if_flags &= ~IFF_RUNNING;
@@ -3210,6 +3214,7 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	task_set(&sc->sc_reset_task, mwx_reset_task, sc, "mwx_reset");
 	task_set(&sc->sc_scan_task, mwx_end_scan_task, sc, "mwx_scan");
 	timeout_set(&sc->sc_reset_to, mwx_reset_timeo, sc);
+	timeout_set(&sc->sc_scan_to, mwx_scan_timeo, sc);
 
 	/*
 	 * We cannot read the MAC address without loading the
@@ -4780,6 +4785,10 @@ mwx_mcu_rx_event(struct mwx_softc *sc, struct mbuf *m)
 	rxd_seq = rxd->seq;
 	m_adj(m, sizeof(*rxd));
 	mwx_mcu_trace_sta_status(sc, rxd_eid, rxd_seq, m);
+	if (rxd_eid != MCU_EVENT_TX_DONE && rxd_eid != MCU_EVENT_LP_INFO) {
+		MWX_DEV_LOG(sc, "mcu rx event eid=0x%02x ext_eid=0x%02x seq=%u len=%d\n",
+		    rxd_eid, rxd_ext_eid, rxd_seq, len);
+	}
 
 	switch (rxd_eid) {
 	case MCU_EVENT_SCHED_SCAN_DONE:
@@ -5635,6 +5644,18 @@ mwx_mac_init(struct mwx_softc *sc)
 	mwx_mac_init_band(sc, 1);
 
 	sc->sc_rxfilter = mwx_read(sc, MT_WF_RFCR(0));
+	/* Mask out all drop bits that block incoming wireless frames:
+	 * Beacons, probe responses, and frames from other BSSIDs must not be dropped. */
+	sc->sc_rxfilter &= ~(
+	    MT_WF_RFCR_DROP_OTHER_BEACON |
+	    MT_WF_RFCR_DROP_OTHER_BSS |
+	    MT_WF_RFCR_DROP_OTHER_UC |
+	    MT_WF_RFCR_DROP_A3_MAC |
+	    MT_WF_RFCR_DROP_A3_BSSID |
+	    MT_WF_RFCR_DROP_A2_BSSID |
+	    MT_WF_RFCR_DROP_PROBEREQ |
+	    MT_WF_RFCR_DROP_MCAST_FILTERED
+	);
 }
 
 int
@@ -6010,22 +6031,22 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 
 	req->seq_num = sc->sc_scan_seq_num /* | sc->sc_band_idx << 7 */;
 	req->bss_idx = /* mvif->idx */ 0;
-	req->scan_type = /* sreq->n_ssids ? 1 : */ 0;
-	req->probe_req_num = /* sreq->n_ssids ? 2 : */ 0;
+	req->scan_type = 0;
+	req->probe_req_num = 0;
 	req->version = 1;
 
 #ifdef AIRPORT_WCL
 	/*
-	 * A scan macOS asked for (AirportMtkWlan): active when it wants probes,
-	 * with its SSID (hidden networks), on its channels.
-	 * Like Linux mt76: probing with no SSID is the wildcard (ssid_type 1).
+	 * A scan macOS asked for (AirportMtkWlan): active when it wants probes
+	 * for a specific SSID (hidden networks). For general discovery (n_ssids == 0),
+	 * passive scan (scan_type = 0) is used, matching Linux mt76_connac_mcu.c.
 	 */
-	req->scan_type = 1;
-	req->probe_req_num = 2;
 	if (ic->ic_wcl_scan_requested &&
 	    AirportWCL::scanUsesProbes(true, ic->ic_wcl_scan_active)) {
 		if (ic->ic_wcl_scan_ssid_length > 0 &&
 		    ic->ic_wcl_scan_ssid_length <= IEEE80211_NWID_LEN) {
+			req->scan_type = 1;
+			req->probe_req_num = 2;
 			req->ssids[0].ssid_len = htole32(ic->ic_wcl_scan_ssid_length);
 			memcpy(req->ssids[0].ssid, ic->ic_wcl_scan_ssid,
 			    ic->ic_wcl_scan_ssid_length);
@@ -6070,6 +6091,8 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 			chan = &req->ext_channels[nchan - 32];
 
 		channel_num = ieee80211_mhz2ieee(c->ic_freq, 0);
+		if (channel_num == 14)
+			continue;
 		/* TODO IEEE80211_IS_CHAN_6GHZ -> chan->band = 3*/
 		if (IEEE80211_IS_CHAN_2GHZ(c)) {
 			chan->band = 1;
@@ -6126,9 +6149,15 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	    le16toh(req->channel_min_dwell_time),
 	    (uint32_t)req->scan_func, req->ssid_type);
 
+	/* Ensure RMAC hardware filter does not drop unassociated beacons or probe responses */
+	mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS);
+	mwx_clear(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS);
+
 	rv = mwx_mcu_send_mbuf(sc, MCU_CE_CMD_START_HW_SCAN, m, NULL);
 	if (rv != 0)
 		sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);
+	else
+		timeout_add_msec(&sc->sc_scan_to, 4000);
 
 	return rv;
 }
@@ -6145,11 +6174,27 @@ mt7921_mcu_hw_scan_cancel(struct mwx_softc *sc)
 	};
 	int rv;
 
+	timeout_del(&sc->sc_scan_to);
 	rv = mwx_mcu_send_msg(sc, MCU_CE_CMD_CANCEL_HW_SCAN, &req,
 	    sizeof(req), NULL);
 	if (rv == 0)
 		sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);
 	return rv;
+}
+
+void
+mwx_scan_timeo(void *arg)
+{
+	struct mwx_softc *sc = (struct mwx_softc *)arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+
+	if (!(sc->sc_flags & MWX_FLAG_SCANNING))
+		return;
+
+	int nodes = mwx_count_nodes(ic);
+	MWX_DEV_LOG(sc, "hw scan timeout (4s): completing scan cycle nodes=%d\n", nodes);
+	mt7921_mcu_hw_scan_cancel(sc);
+	task_add(systq, &sc->sc_scan_task);
 }
 
 void
@@ -6185,6 +6230,7 @@ mt7921_mcu_scan_event(struct mwx_softc *sc, struct mbuf *m)
 	uint32_t probe_sum = 0, mdrdy_sum = 0;
 	int i, nodes_before;
 
+	timeout_del(&sc->sc_scan_to);
 	sc->sc_scan_done_count++;
 	nodes_before = mwx_count_nodes(ic);
 	sc->sc_scan_last_ieee80211_nodes = nodes_before;
@@ -6858,6 +6904,7 @@ mt7921_mcu_set_beacon_filter(struct mwx_softc *sc, int enable)
 			return rv;
 #endif
 		mwx_set(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON);
+		mwx_set(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON);
 		rv = mt7921_mcu_set_rxfilter(sc, 0,
 		    MT7921_FIF_BIT_SET, MT_WF_RFCR_DROP_OTHER_BEACON);
 	} else {
@@ -6865,6 +6912,7 @@ mt7921_mcu_set_beacon_filter(struct mwx_softc *sc, int enable)
 		if (rv)
 			return rv;
 		mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON);
+		mwx_clear(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON);
 		rv = mt7921_mcu_set_rxfilter(sc, 0,
 		    MT7921_FIF_BIT_CLR, MT_WF_RFCR_DROP_OTHER_BEACON);
 	}
@@ -8565,11 +8613,13 @@ MtkMwx::detach(IOPCIDevice *device)
     com->sc_detaching = true;
     mwx_rx_amsdu_begin_teardown(com);
     timeout_del(&com->sc_reset_to);
+    timeout_del(&com->sc_scan_to);
     /* Keep interrupts alive while in-flight MCU requests finish. */
     taskq_quiesce(com->sc_nswq);
     if (taskQueueOwned) taskq_quiesce(systq);
     if (ifp->if_flags & IFF_RUNNING) mwx_stop_internal(ifp, true);
     timeout_free(&com->sc_reset_to);
+    timeout_free(&com->sc_scan_to);
     /* No interrupt callback may access buffers during their destruction. */
     if (com->sc_ih) {
         pci_intr_disestablish(pci->pa_pc, com->sc_ih);

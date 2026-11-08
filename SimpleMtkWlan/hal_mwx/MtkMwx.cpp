@@ -5640,12 +5640,13 @@ mwx_mac_init(struct mwx_softc *sc)
 	mwx_mac_init_band(sc, 1);
 
 	sc->sc_rxfilter = mwx_read(sc, MT_WF_RFCR(0));
-	/* Mask out all drop bits that block incoming wireless frames:
-	 * Beacons, probe responses, and frames from other BSSIDs must not be dropped. */
+	/* Mask out drop bits that block incoming wireless beacons and probe responses:
+	 * Beacons, probe responses, and frames from other BSSIDs must not be dropped.
+	 * KEEP DROP_OTHER_UC set: foreign unicast data frames saturate the workloop
+	 * with amsdu-err drops if unmasked. */
 	sc->sc_rxfilter &= ~(
 	    MT_WF_RFCR_DROP_OTHER_BEACON |
 	    MT_WF_RFCR_DROP_OTHER_BSS |
-	    MT_WF_RFCR_DROP_OTHER_UC |
 	    MT_WF_RFCR_DROP_A3_MAC |
 	    MT_WF_RFCR_DROP_A3_BSSID |
 	    MT_WF_RFCR_DROP_A2_BSSID |

@@ -289,7 +289,7 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     memcpy(ic->ic_wcl_scan_ssid, scan.ssid, sizeof(scan.ssid));
     ic->ic_wcl_scan_restricted = scan.channelCount != 0;
     memcpy(ic->ic_wcl_scan_channels, scan.channels, sizeof(scan.channels));
-    scanSource->setTimeoutMS(20000);
+    scanSource->setTimeoutMS(3500);
     if (ic->ic_state == IEEE80211_S_RUN) {
         ieee80211_begin_cache_bgscan(&ic->ic_if);
         if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
@@ -319,6 +319,7 @@ void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
 {
     if (!scanPending)
         return;
+    IOLog("AirportMtkWlan: finishWCLScan status=0x%x (scanCompleted=%d)\n", status, scanCompleted);
     scanPending = false;
     scanCompleted = false;
     scanSource->cancelTimeout();
@@ -328,8 +329,15 @@ void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
 
 void AirportItlwmSkywalkInterface::completeWCLScan()
 {
-    if (!wclStopping)
+    if (!wclStopping) {
+        ieee80211com *ic = fHalService->get80211Controller();
+        if (scanPending && !scanCompleted) {
+            IOLog("AirportMtkWlan: WCL scan watchdog (3.5s): ending scan cycle\n");
+            scanCompleted = true;
+            ieee80211_end_scan(&ic->ic_if);
+        }
         finishWCLScan(scanCompleted ? kIOReturnSuccess : kIOReturnTimeout);
+    }
 }
 
 void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, const uint8_t *ies, size_t length)
@@ -342,6 +350,12 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     unsigned channel = ieee80211_chan2ieee(ic, node->ni_chan);
     if (!channel || channel > 196)
         return;
+    char ssidBuf[33] = {0};
+    memcpy(ssidBuf, node->ni_essid, std::min<size_t>(node->ni_esslen, 32));
+    IOLog("AirportMtkWlan: publishWCLBeacon SSID='%s' chan=%u rssi=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x\n",
+        ssidBuf, channel, IWM_MIN_DBM + node->ni_rssi,
+        node->ni_bssid[0], node->ni_bssid[1], node->ni_bssid[2],
+        node->ni_bssid[3], node->ni_bssid[4], node->ni_bssid[5]);
     size_t size = sizeof(AirportWCL::BeaconMetadata) + length;
     auto metadata = static_cast<AirportWCL::BeaconMetadata *>(IOMalloc(size));
     if (!metadata)

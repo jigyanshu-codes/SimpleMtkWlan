@@ -1411,7 +1411,13 @@ mwx_init_hw(struct ifnet *ifp)
 	} else {
 		rv = mt7921_mcu_set_sniffer(sc, 0);
 		MWX_DEV_LOG(sc, "init sniffer disable returned %d\n", rv);
-		sc->sc_rxfilter &= ~MT_WF_RFCR_DROP_OTHER_UC;
+		/* Keep DROP_OTHER_UC set: we do NOT want unicast data frames
+		 * addressed to other stations flooding the RX ring while
+		 * scanning.  Management frames (beacons, probe responses)
+		 * use broadcast RA and are not affected by this bit.
+		 * Clearing it previously caused ~2000 amsdu-err drops per
+		 * scan cycle, saturating the workloop and preventing the
+		 * MCU from delivering SCAN_DONE. */
 		mwx_clear(sc, MT_DMA_DCR0(0), MT_DMA_DCR0_RXD_G5_EN);
 	}
 	mwx_write(sc, MT_WF_RFCR(0), sc->sc_rxfilter);
@@ -2454,6 +2460,18 @@ mwx_rx(struct mwx_softc *sc, struct mbuf *m, struct mbuf_list *ml, uint8_t rxque
 	}
 
 	wh = mtod(m, struct ieee80211_frame *);
+
+	/* While scanning (not associated), drop all data frames early.
+	 * Only management frames (beacons, probe responses, action) are
+	 * useful for populating the scan node list.  Data frames from
+	 * neighbouring BSSes just waste CPU and can stall the workloop. */
+	if (ic->ic_state != IEEE80211_S_RUN &&
+	    (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
+		ic->ic_stats.is_rx_wrongdir++;
+		m_freem(m);
+		return;
+	}
+
 	if (sc->sc_rx_delivered < 32) {
 		uint8_t type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 		uint8_t subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
@@ -6073,9 +6091,13 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	}
 
 	req->channel_type = nchan ? 4 : 0;
-	req->timeout_value = htole16(nchan * 120);
-	req->channel_min_dwell_time = htole16(120);
-	req->channel_dwell_time = htole16(120);
+	/* connac2 (MT7902) requires dwell = 0 to let MCU firmware use its
+	 * internal optimised channel-switch table.  Non-zero values cause the
+	 * MCU to stall and never send MCU_EVENT_SCAN_DONE.
+	 * Ref: mt76_connac_mcu.c:1782 "duration = is_connac2(...) ? 0 : ..." */
+	req->timeout_value = htole16(0);
+	req->channel_min_dwell_time = htole16(0);
+	req->channel_dwell_time = htole16(0);
 
 
 #ifdef NOTYET

@@ -5640,13 +5640,12 @@ mwx_mac_init(struct mwx_softc *sc)
 	mwx_mac_init_band(sc, 1);
 
 	sc->sc_rxfilter = mwx_read(sc, MT_WF_RFCR(0));
-	/* Mask out drop bits that block incoming wireless beacons and probe responses:
-	 * Beacons, probe responses, and frames from other BSSIDs must not be dropped.
-	 * KEEP DROP_OTHER_UC set: foreign unicast data frames saturate the workloop
-	 * with amsdu-err drops if unmasked. */
+	/* Mask out drop bits that block incoming wireless frames:
+	 * Beacons, probe responses, and frames from other BSSIDs must not be dropped. */
 	sc->sc_rxfilter &= ~(
 	    MT_WF_RFCR_DROP_OTHER_BEACON |
 	    MT_WF_RFCR_DROP_OTHER_BSS |
+	    MT_WF_RFCR_DROP_OTHER_UC |
 	    MT_WF_RFCR_DROP_A3_MAC |
 	    MT_WF_RFCR_DROP_A3_BSSID |
 	    MT_WF_RFCR_DROP_A2_BSSID |
@@ -6143,6 +6142,10 @@ mt7921_mcu_hw_scan(struct mwx_softc *sc, int bgscan)
 	    le16toh(req->channel_dwell_time),
 	    le16toh(req->channel_min_dwell_time),
 	    (uint32_t)req->scan_func, req->ssid_type);
+
+	/* Ensure RMAC hardware filter does not drop unassociated beacons, BSS frames, or packets */
+	mwx_clear(sc, MT_WF_RFCR(0), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS | MT_WF_RFCR_DROP_OTHER_UC);
+	mwx_clear(sc, MT_WF_RFCR(1), MT_WF_RFCR_DROP_OTHER_BEACON | MT_WF_RFCR_DROP_OTHER_BSS | MT_WF_RFCR_DROP_OTHER_UC);
 
 	rv = mwx_mcu_send_mbuf(sc, MCU_CE_CMD_START_HW_SCAN, m, NULL);
 	if (rv != 0)

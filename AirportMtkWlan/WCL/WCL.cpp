@@ -175,9 +175,13 @@ IOReturn AirportItlwmSkywalkInterface::wclCommand(OSObject *, void *a0, void *a1
         case 16: return self->applyWCLRoamLock(a2);
         case 13: return self->copyWCLChannels(a2);
         case 14: return self->copyWCLTrafficCounters(a2);
-        case 15:
-            return self->fHalService->setScanHomeAwayTime(
-                AirportWCL::read32(static_cast<const uint8_t *>(a2)));
+        case 15: {
+            uint32_t val = a2 ? AirportWCL::read32(static_cast<const uint8_t *>(a2)) : 0;
+            IOLog("AirportMtkWlan: setScanHomeAwayTime val=0x%x\n", val);
+            if (self->fHalService)
+                self->fHalService->setScanHomeAwayTime(val);
+            return kIOReturnSuccess;
+        }
         case 12:
             self->handleWCLEvent(int(uintptr_t(a2)), nullptr);
             return kIOReturnSuccess;

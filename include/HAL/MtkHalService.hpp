@@ -53,7 +53,7 @@ public:
     virtual struct ieee80211com *get80211Controller() = 0;
 #ifdef AIRPORT_WCL
     /* Native Wi-Fi (AirportMtkWlan): off-channel time per channel macOS asks scans to use. */
-    virtual IOReturn setScanHomeAwayTime(uint32_t) { return kIOReturnUnsupported; }
+    virtual IOReturn setScanHomeAwayTime(uint32_t) { return kIOReturnSuccess; }
 #endif
     
     virtual MtkDriverInfo *getDriverInfo() = 0;
